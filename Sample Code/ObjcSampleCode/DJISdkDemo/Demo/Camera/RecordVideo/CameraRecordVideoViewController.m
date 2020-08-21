@@ -14,19 +14,29 @@
 
 #import <DJISDK/DJISDK.h>
 #import "DemoUtility.h"
-#import "VideoPreviewer.h"
+#import <DJIWidget/DJIVideoPreviewer.h>
 #import "CameraRecordVideoViewController.h"
+#import "VideoPreviewerSDKAdapter.h"
+#import <DJIWidget/DJIVideoFeedCachingSession.h>
 
 @interface CameraRecordVideoViewController () <DJICameraDelegate>
 
 @property (nonatomic) BOOL isInRecordVideoMode;
 @property (nonatomic) BOOL isRecordingVideo;
-@property (nonatomic) int recordingTime;
+@property (nonatomic) NSUInteger recordingTime;
 
-@property (strong, nonatomic) UIView *videoFeedView;
+@property (weak, nonatomic) IBOutlet UIView *videoFeedView;
+
 @property (weak, nonatomic) IBOutlet UILabel *recordingTimeLabel;
 @property (weak, nonatomic) IBOutlet UIButton *startRecordButton;
 @property (weak, nonatomic) IBOutlet UIButton *stopRecordButton;
+
+@property (nonatomic) VideoPreviewerSDKAdapter *previewerAdapter; 
+
+@property (nonatomic) BOOL isSDCardInserted;
+@property (nonatomic) BOOL isUsingInternalStorage;
+@property (nonatomic) DJIVideoFeedCachingSession* recordVideoSession;
+@property (nonatomic) DJICameraStorageLocation activeStorageLocation;
 
 @end
 
@@ -63,6 +73,55 @@
     }
     
     [self cleanVideoPreview];
+	[[DJISDKManager keyManager] stopAllListeningOfListeners:self];
+}
+
+- (void)bindDatas {
+	WeakRef(target);
+	DJIKey *storageKey = [DJICameraKey keyWithParam:DJICameraParamStorageLocation];
+	[[DJISDKManager keyManager] startListeningForChangesOnKey:storageKey withListener:self andUpdateBlock:^(DJIKeyedValue * _Nullable oldValue, DJIKeyedValue * _Nullable newValue) {
+		WeakReturn(target);
+		if (newValue) {
+			target.activeStorageLocation = [newValue integerValue];
+		}
+	}];
+	DJIKeyedValue *storageValue = [[DJISDKManager keyManager] getValueForKey:storageKey];
+	if (storageValue) {
+		self.activeStorageLocation = [storageValue integerValue];
+	}
+}
+
+#pragma mark - Record Video Session
+
+- (void)setupRecordVideoSession {
+	self.recordVideoSession = [[DJIVideoFeedCachingSession alloc] initWithVideoPreviewer:[DJIVideoPreviewer instance]];
+	[self.recordVideoSession addObserver:self forKeyPath:@"recordingStatus" options:NSKeyValueObservingOptionNew context:nil];
+}
+
+- (void)cleanupRecordVideoSession {
+	[self.recordVideoSession removeObserver:self forKeyPath:@"recordingStatus"];
+	[self.recordVideoSession stopSession];
+	self.recordVideoSession = nil;
+}
+
+-(void) onSessionRecordStatusChanged:(id)value
+{
+	if (self.recordVideoSession.recordingStatus == DJILiveViewDammyCameraRecordingStatusRecording) {
+		[self.startRecordButton setEnabled:NO];
+		[self.stopRecordButton setEnabled:YES];
+	} else {
+		[self.startRecordButton setEnabled:YES];
+		[self.stopRecordButton setEnabled:NO];
+	}
+}
+
+-(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context
+{
+	if ([keyPath isEqualToString:@"recordingStatus"]) {
+		[self onSessionRecordStatusChanged:change];
+	} else {
+		[super observeValueForKeyPath:keyPath ofObject:object change:change context:nil];
+	}
 }
 
 #pragma mark - Precondition
@@ -75,10 +134,10 @@
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
         WeakRef(target);
-        [camera getCameraModeWithCompletion:^(DJICameraMode mode, NSError * _Nullable error) {
+        [camera getModeWithCompletion:^(DJICameraMode mode, NSError * _Nullable error) {
             WeakReturn(target);
             if (error) {
-                ShowResult(@"ERROR: getCameraModeWithCompletion:. %@", error.description);
+                ShowResult(@"ERROR: getModeWithCompletion:. %@", error.description);
             }
             else if (mode == DJICameraModeRecordVideo) {
                 target.isInRecordVideoMode = YES;
@@ -98,10 +157,10 @@
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
         WeakRef(target);
-        [camera setCameraMode:DJICameraModeRecordVideo withCompletion:^(NSError * _Nullable error) {
+        [camera setMode:DJICameraModeRecordVideo withCompletion:^(NSError * _Nullable error) {
             WeakReturn(target);
             if (error) {
-                ShowResult(@"ERROR: setCameraMode:withCompletion:. %@", error.description);
+                ShowResult(@"ERROR: setMode:withCompletion:. %@", error.description);
             }
             else {
                 // Normally, once an operation is finished, the camera still needs some time to finish up
@@ -123,6 +182,24 @@
 - (IBAction)onStartRecordButtonClicked:(id)sender {
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
+		
+		if (!self.isSDCardInserted &&
+			!self.isUsingInternalStorage &&
+			self.isInRecordVideoMode) {
+			if (self.recordVideoSession.recordingStatus == DJILiveViewDammyCameraRecordingStatusRecording) {
+				ShowResult(@"Current in record video mode");
+			} else {
+				WeakRef(target);
+				[DemoAlertView showAlertViewWithMessage:@"Record Without SD card, Save on SandBox" titles:@[@"Cancel", @"OK"] action:^(NSUInteger buttonIndex) {
+					if (buttonIndex == 1) {
+						[target setupRecordVideoSession];
+						[target.recordVideoSession startSession];
+					}
+				}];
+			}
+			return;
+		}
+		
         [self.startRecordButton setEnabled:NO];
         [camera startRecordVideoWithCompletion:^(NSError * _Nullable error) {
             if (error) {
@@ -139,6 +216,19 @@
 - (IBAction)onStopRecordButtonClicked:(id)sender {
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
+		
+		if (!self.isSDCardInserted &&
+			!self.isUsingInternalStorage &&
+			self.isInRecordVideoMode) {
+			if (self.recordVideoSession.recordingStatus != DJILiveViewDammyCameraRecordingStatusRecording) {
+				ShowResult(@"Current not in record video mode");
+			} else {
+				[self.recordVideoSession stopSession];
+				[self cleanupRecordVideoSession];
+			}
+			return;
+		}
+		
         [self.stopRecordButton setEnabled:NO];
         [camera stopRecordVideoWithCompletion:^(NSError * _Nullable error) {
             if (error) {
@@ -150,22 +240,19 @@
 
 #pragma mark - UI related
 - (void)setVideoPreview {
-    self.videoFeedView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)];
-    [self.view addSubview:self.videoFeedView];
-    [self.view sendSubviewToBack:self.videoFeedView];
-    //    self.videoFeedView.backgroundColor = [UIColor grayColor];
-    
-    [[VideoPreviewer instance] start];
-    [[VideoPreviewer instance] setView:self.videoFeedView];
+    [[DJIVideoPreviewer instance] start];
+    [[DJIVideoPreviewer instance] setView:self.videoFeedView];
+    self.previewerAdapter = [VideoPreviewerSDKAdapter adapterWithDefaultSettings];
+    [self.previewerAdapter start];
+	DJICamera* camera = [DemoComponentHelper fetchCamera];
+	[self.previewerAdapter setupFrameControlHandler];
 }
 
 - (void)cleanVideoPreview {
-    [[VideoPreviewer instance] unSetView];
-    [VideoPreviewer removePreview];
-    
-    if (self.videoFeedView != nil) {
-        [self.videoFeedView removeFromSuperview];
-        self.videoFeedView = nil;
+    [[DJIVideoPreviewer instance] unSetView];
+    if (self.previewerAdapter) {
+    	[self.previewerAdapter stop];
+    	self.previewerAdapter = nil;
     }
 }
 
@@ -180,25 +267,40 @@
 }
 
 -(void) toggleRecordUI {
-    [self.startRecordButton setEnabled:(self.isInRecordVideoMode && !self.isRecordingVideo)];
-    [self.stopRecordButton setEnabled:(self.isInRecordVideoMode && self.isRecordingVideo)];
-    if (!self.isRecordingVideo) {
+	BOOL isUsedNoSDCardRecordVideo = !self.isSDCardInserted && !self.isUsingInternalStorage && self.isInRecordVideoMode;
+	BOOL isNoSDCardRecordingVideo = self.recordVideoSession.recordingStatus == DJILiveViewDammyCameraRecordingStatusRecording;
+	if (isUsedNoSDCardRecordVideo) {
+		[self.startRecordButton setEnabled:(self.isInRecordVideoMode && !isNoSDCardRecordingVideo)];
+		[self.stopRecordButton setEnabled:(self.isInRecordVideoMode && isNoSDCardRecordingVideo)];
+	} else {
+		[self.startRecordButton setEnabled:(self.isInRecordVideoMode && !self.isRecordingVideo)];
+		[self.stopRecordButton setEnabled:(self.isInRecordVideoMode && self.isRecordingVideo)];
+	}
+	
+	if (isUsedNoSDCardRecordVideo) {
+		if (isNoSDCardRecordingVideo) {
+			
+		}
+	} else {
+		
+	}
+	BOOL isRecordingVideo = self.isRecordingVideo || isNoSDCardRecordingVideo;
+    if (!isRecordingVideo) {
         self.recordingTimeLabel.text = @"00:00";
     }
     else {
-        int hour = self.recordingTime / 3600;
-        int minute = (self.recordingTime % 3600) / 60;
-        int second = (self.recordingTime % 3600) % 60;
-        self.recordingTimeLabel.text = [NSString stringWithFormat:@"%02d:%02d:%02d",hour, minute, second];
+		NSUInteger recordTime = self.recordingTime;
+		if (isUsedNoSDCardRecordVideo) {
+			recordTime = self.recordVideoSession.recordedTime;
+		}
+		int hour = (int)recordTime / 3600;
+		int minute = (recordTime % 3600) / 60;
+		int second = (recordTime % 3600) % 60;
+		self.recordingTimeLabel.text = [NSString stringWithFormat:@"%02d:%02d:%02d",hour, minute, second];
     }
 }
 
 #pragma mark - DJICameraDelegate
--(void)camera:(DJICamera *)camera didReceiveVideoData:(uint8_t *)videoBuffer length:(size_t)size {
-    uint8_t* pBuffer = (uint8_t*)malloc(size);
-    memcpy(pBuffer, videoBuffer, size);
-    [[[VideoPreviewer instance] dataQueue] push:pBuffer length:(int)size];
-}
 
 -(void)camera:(DJICamera *)camera didUpdateSystemState:(DJICameraSystemState *)systemState {
     self.isRecordingVideo = systemState.isRecording;
@@ -206,4 +308,17 @@
     self.recordingTime = systemState.currentVideoRecordingTimeInSeconds;
 }
 
+-(void)camera:(DJICamera *)camera didUpdateStorageState:(DJICameraStorageState *)sdCardState {
+    if (sdCardState.location == DJICameraStorageLocationSDCard) {
+        self.isSDCardInserted = sdCardState.isInserted;
+    }
+	if (self.activeStorageLocation == DJICameraStorageLocationSDCard) {
+        if (sdCardState.location == DJICameraStorageLocationSDCard) {
+            self.isSDCardInserted = sdCardState.isInserted;
+        }
+	}
+	else {
+		self.isUsingInternalStorage = sdCardState.isInserted;
+	}
+}
 @end

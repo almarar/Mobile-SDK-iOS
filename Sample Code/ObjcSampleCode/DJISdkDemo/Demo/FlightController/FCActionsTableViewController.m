@@ -14,6 +14,7 @@
 #import "FCVirtualStickViewController.h"
 #import "FCFlightLimitationViewController.h"
 #import "FCGeneralControlViewController.h"
+#import "FCIntelligentAssistantViewController.h"
 #import <DJISDK/DJISDK.h>
 
 @interface FCActionsTableViewController ()
@@ -32,14 +33,17 @@
     DemoSettingItem* item0 = [DemoSettingItem itemWithName:@"General Control" andClass:[FCGeneralControlViewController class]];
     DemoSettingItem* item1 = [DemoSettingItem itemWithName:@"Compass" andClass:[FCCompassViewController class]];
     DemoSettingItem* item2 = [DemoSettingItem itemWithName:@"Flight Limitation" andClass:[FCFlightLimitationViewController class]];
-    if (fc && fc.landingGear.isLandingGearMovable) {
-        DemoSettingItem* item3 = [DemoSettingItem itemWithName:@"Landing Gear" andClass:[FCLandingGearViewController class]];
-        [self.items addObject:@[item0, item1, item2, item3]];
+    DemoSettingItem* item3 = [DemoSettingItem itemWithName:@"Landing Gear" andClass:[FCLandingGearViewController class]];
+    DemoSettingItem* item4 = [DemoSettingItem itemWithName:@"Flight Assistant" andClass:[FCIntelligentAssistantViewController class]];
+    NSMutableArray* array = [[NSMutableArray alloc] initWithArray:@[item0, item1, item2]];
+    if (fc && fc.isLandingGearMovable) {
+        [array addObject:item3];
     }
-    else
-    {
-        [self.items addObject:@[item0, item1, item2]];
+    if (fc && fc.flightAssistant) {
+        [array addObject:item4];
     }
+    
+    [self.items addObject:array];
     
     // Orientation Mode
     [self.items addObject:@[[DemoSettingItem itemWithName:@"Orientation Mode" andClass:[FCOrientationViewController class]]]];

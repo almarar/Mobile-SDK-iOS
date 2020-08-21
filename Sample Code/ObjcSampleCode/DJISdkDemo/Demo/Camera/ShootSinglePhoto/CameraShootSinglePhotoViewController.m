@@ -13,8 +13,10 @@
 
 #import <DJISDK/DJISDK.h>
 #import "DemoUtility.h"
-#import "VideoPreviewer.h"
+#import <DJIWidget/DJIVideoPreviewer.h>
+#import <DJIWidget/DJILiveViewDammyCameraTakePhotoSession.h>
 #import "CameraShootSinglePhotoViewController.h"
+#import "VideoPreviewerSDKAdapter.h"
 
 @interface CameraShootSinglePhotoViewController () <DJICameraDelegate>
 
@@ -22,9 +24,16 @@
 @property (nonatomic) BOOL isShootingPhoto;
 @property (nonatomic) BOOL isStoringPhoto;
 
-@property (strong, nonatomic) UIView *videoFeedView;
+@property (weak, nonatomic) IBOutlet UIView *videoFeedView;
 @property (weak, nonatomic) IBOutlet UIButton *shootPhotoButton;
 
+@property (nonatomic) VideoPreviewerSDKAdapter *previewerAdapter; 
+@property (nonatomic, strong) DJILiveViewDammyCameraTakePhotoSession* captureSession;
+
+@property (nonatomic, assign) BOOL isSDCardInserted;
+@property (nonatomic, assign) BOOL isUsingInternalStorage;
+@property (nonatomic, assign) BOOL isSingleSinglePhotoMode;
+@property (nonatomic, assign) DJICameraStorageLocation activeStorageLocation;
 @end
 
 @implementation CameraShootSinglePhotoViewController
@@ -45,6 +54,8 @@
     
     // start to check the pre-condition
     [self getCameraMode];
+	[self bindDatas];
+	[self setupCaptureSession];
 }
 
 -(void)viewWillDisappear:(BOOL)animated {
@@ -57,7 +68,68 @@
     }
     
     [self cleanVideoPreview];
+	[self cleanupCaptureSession];
+	[[DJISDKManager keyManager] stopAllListeningOfListeners:self];
 }
+
+- (void)bindDatas {
+	WeakRef(target);
+	DJIKey *storageKey = [DJICameraKey keyWithParam:DJICameraParamStorageLocation];
+	[[DJISDKManager keyManager] startListeningForChangesOnKey:storageKey withListener:self andUpdateBlock:^(DJIKeyedValue * _Nullable oldValue, DJIKeyedValue * _Nullable newValue) {
+		WeakReturn(target);
+		if (newValue) {
+			target.activeStorageLocation = [newValue integerValue];
+		}
+	}];
+	DJIKeyedValue *storageValue = [[DJISDKManager keyManager] getValueForKey:storageKey];
+	if (storageValue) {
+		self.activeStorageLocation = [storageValue integerValue];
+	}
+	
+	DJIKey *shootPhotoModeKey = [DJICameraKey keyWithParam:DJICameraParamShootPhotoMode];
+	[[DJISDKManager keyManager] startListeningForChangesOnKey:shootPhotoModeKey withListener:self andUpdateBlock:^(DJIKeyedValue * _Nullable oldValue, DJIKeyedValue * _Nullable newValue) {
+		WeakReturn(target);
+		if (newValue) {
+			target.isSingleSinglePhotoMode = [storageValue integerValue] == DJICameraShootPhotoModeSingle;
+		}
+	}];
+	DJIKeyedValue *shootPhotoModeValue = [[DJISDKManager keyManager] getValueForKey:storageKey];
+	if (shootPhotoModeValue) {
+		self.isSingleSinglePhotoMode = [storageValue integerValue] == DJICameraShootPhotoModeSingle;
+	}
+}
+
+#pragma mark - Capture Session
+
+- (void)setupCaptureSession {
+	self.captureSession = [[DJILiveViewDammyCameraTakePhotoSession alloc] initWithVideoPreviewer:[DJIVideoPreviewer instance]];
+	[self.captureSession addObserver:self forKeyPath:@"captureStatus" options:NSKeyValueObservingOptionNew context:nil];
+}
+
+- (void)cleanupCaptureSession {
+	[self.captureSession removeObserver:self forKeyPath:@"captureStatus"];
+	[self.captureSession stopSession];
+	self.captureSession = nil;
+}
+
+-(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context
+{
+	if ([keyPath isEqualToString:@"captureStatus"]) {
+		[self onSessionCaptureStatusChanged:change];
+	} else {
+		[super observeValueForKeyPath:keyPath ofObject:object change:change context:nil];
+	}
+}
+
+-(void) onSessionCaptureStatusChanged:(id)value
+{
+	if (self.captureSession.captureStatus == DJILiveViewDammyCameraCaptureStatusCapturing) {
+		[self.shootPhotoButton setEnabled:NO];
+	} else {
+		[self.shootPhotoButton setEnabled:YES];
+	}
+}
+
 
 #pragma mark - Precondition
 /**
@@ -69,10 +141,10 @@
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
         WeakRef(target);
-        [camera getCameraModeWithCompletion:^(DJICameraMode mode, NSError * _Nullable error) {
+        [camera getModeWithCompletion:^(DJICameraMode mode, NSError * _Nullable error) {
             WeakReturn(target);
             if (error) {
-                ShowResult(@"ERROR: getCameraModeWithCompletion:. %@", error.description);
+                ShowResult(@"ERROR: getModeWithCompletion:. %@", error.description);
             }
             else if (mode == DJICameraModeShootPhoto) {
                 target.isInShootPhotoMode = YES;
@@ -92,17 +164,25 @@
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
         WeakRef(target);
-        [camera setCameraMode:DJICameraModeShootPhoto withCompletion:^(NSError * _Nullable error) {
+        [camera setMode:DJICameraModeShootPhoto withCompletion:^(NSError * _Nullable error) {
             WeakReturn(target);
             if (error) {
-                ShowResult(@"ERROR: setCameraMode:withCompletion:. %@", error.description);
+                ShowResult(@"ERROR: setMode:withCompletion:. %@", error.description);
             }
             else {
                 // Normally, once an operation is finished, the camera still needs some time to finish up
                 // all the work. It is safe to delay the next operation after an operation is finished.
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     WeakReturn(target);
-                    target.isInShootPhotoMode = YES;
+                    [camera setShootPhotoMode:DJICameraShootPhotoModeSingle withCompletion:^(NSError * _Nullable error) {
+                        WeakReturn(target);
+                        if (error) {
+                            ShowResult(@"ERROR: setShootPhotoMode:withCompletion:. %@", error.description);
+                        }
+                        else {
+                            target.isInShootPhotoMode = YES;
+                        }
+                    }];
                 });
             }
         }];
@@ -117,8 +197,25 @@
 - (IBAction)onShootPhotoButtonClicked:(id)sender {
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
-        [self.shootPhotoButton setEnabled:NO];
-        [camera startShootPhoto:DJICameraShootPhotoModeSingle withCompletion:^(NSError * _Nullable error) {
+		if (self.activeStorageLocation == DJICameraStorageLocationSDCard &&
+			!self.isSDCardInserted &&
+			!self.isUsingInternalStorage &&
+			self.isSingleSinglePhotoMode) {
+			if (self.captureSession.captureStatus == DJILiveViewDammyCameraCaptureStatusCapturing) {
+				[self.captureSession stopSession];
+			} else {
+				WeakRef(target);
+				[DemoAlertView showAlertViewWithMessage:@"ShotPhoto Without SD card, Save on Photo Library" titles:@[@"Cancel", @"OK"] action:^(NSUInteger buttonIndex) {
+					if (buttonIndex == 1) {
+						[target.captureSession startSession];
+					}
+				}];
+			}
+			return;
+		}
+		
+		[self.shootPhotoButton setEnabled:NO];
+        [camera startShootPhotoWithCompletion:^(NSError * _Nullable error) {
             if (error) {
                 ShowResult(@"ERROR: startShootPhoto:withCompletion:. %@", error.description);
             }
@@ -128,22 +225,19 @@
 
 #pragma mark - UI related
 - (void)setVideoPreview {
-    self.videoFeedView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)];
-    [self.view addSubview:self.videoFeedView];
-    [self.view sendSubviewToBack:self.videoFeedView];
-//    self.videoFeedView.backgroundColor = [UIColor grayColor];
-    
-    [[VideoPreviewer instance] start];
-    [[VideoPreviewer instance] setView:self.videoFeedView];
+    [[DJIVideoPreviewer instance] start];
+    [[DJIVideoPreviewer instance] setView:self.videoFeedView];
+    self.previewerAdapter = [VideoPreviewerSDKAdapter adapterWithDefaultSettings];
+    [self.previewerAdapter start];
+	DJICamera* camera = [DemoComponentHelper fetchCamera];
+	[self.previewerAdapter setupFrameControlHandler];
 }
 
 - (void)cleanVideoPreview {
-    [[VideoPreviewer instance] unSetView];
-    [VideoPreviewer removePreview];
-    
-    if (self.videoFeedView != nil) {
-        [self.videoFeedView removeFromSuperview];
-        self.videoFeedView = nil;
+    [[DJIVideoPreviewer instance] unSetView];
+    if (self.previewerAdapter) {
+    	[self.previewerAdapter stop];
+    	self.previewerAdapter = nil;
     }
 }
 
@@ -167,11 +261,6 @@
 }
 
 #pragma mark - DJICameraDelegate
--(void)camera:(DJICamera *)camera didReceiveVideoData:(uint8_t *)videoBuffer length:(size_t)size {
-    uint8_t* pBuffer = (uint8_t*)malloc(size);
-    memcpy(pBuffer, videoBuffer, size);
-    [[[VideoPreviewer instance] dataQueue] push:pBuffer length:(int)size];
-}
 
 -(void)camera:(DJICamera *)camera didUpdateSystemState:(DJICameraSystemState *)systemState {
     self.isShootingPhoto = systemState.isShootingSinglePhoto ||
@@ -179,6 +268,16 @@
                            systemState.isShootingBurstPhoto;
     
     self.isStoringPhoto = systemState.isStoringPhoto;
+}
+
+-(void)camera:(DJICamera *)camera didUpdateStorageState:(DJICameraStorageState *)sdCardState {
+	self.isSDCardInserted = sdCardState.isInserted;
+	if (self.activeStorageLocation == DJICameraStorageLocationSDCard) {
+		self.isSDCardInserted = sdCardState.isInserted;
+	}
+	else {
+		self.isUsingInternalStorage = sdCardState.isInserted;
+	}
 }
 
 @end

@@ -55,6 +55,15 @@
     return nil;
 }
 
++ (nullable NSArray <DJICamera *> *)fetchCameras {
+    if (![DJISDKManager product] || ![[DJISDKManager product] isKindOfClass:[DJIAircraft class]]) {
+        return nil;
+    }
+    
+    return ((DJIAircraft*)[DJISDKManager product]).cameras;
+
+}
+
 +(DJIGimbal*) fetchGimbal {
     if (![DJISDKManager product]) {
         return nil;
@@ -123,6 +132,18 @@
     return nil;
 }
 
++(nullable DJIPayload*) fetchPayload {
+    if (![DJISDKManager product]) {
+        return nil;
+    }
+    
+    if ([[DJISDKManager product] isKindOfClass:[DJIAircraft class]]) {
+        return ((DJIAircraft*)[DJISDKManager product]).payload;
+    }
+    
+    return nil;
+}
+
 +(DJIHandheldController*) fetchHandheldController
 {
     if (![DJISDKManager product]) {
@@ -134,6 +155,37 @@
     }
     
     return nil;
+}
+
++(DJIMobileRemoteController *)fetchMobileRemoteController {
+    if (![DJISDKManager product]) {
+        return nil;
+    }
+
+    if ([[DJISDKManager product] isKindOfClass:[DJIAircraft class]]) {
+        return ((DJIAircraft*)[DJISDKManager product]).mobileRemoteController;
+    }
+
+    return nil;
+}
+
++(nullable DJIAccessoryAggregation*) fetchAccessoryAggregation {
+    if (![DJISDKManager product]) {
+        return nil;
+    }
+    
+    if ([[DJISDKManager product] isKindOfClass:[DJIAircraft class]]) {
+        return ((DJIAircraft *)[DJISDKManager product]).accessoryAggregation;
+    }
+    
+    return nil;
+}
+
++(DJIKeyedValue *)startListeningAndGetValueForChangesOnKey:(DJIKey *)key
+                                              withListener:(id)listener
+                                            andUpdateBlock:(DJIKeyedListenerUpdateBlock)updateBlock {
+    [[DJISDKManager keyManager] startListeningForChangesOnKey:key withListener:listener andUpdateBlock:updateBlock];
+    return [[DJISDKManager keyManager] getValueForKey:key];
 }
 
 @end

@@ -14,20 +14,23 @@
  */
 #import <DJISDK/DJISDK.h>
 #import "DemoUtility.h"
-#import "VideoPreviewer.h"
+#import <DJIWidget/DJIVideoPreviewer.h>
 #import "CameraPlaybackCommandViewController.h"
+#import "VideoPreviewerSDKAdapter.h"
 
 @interface CameraPlaybackCommandViewController () <DJICameraDelegate, DJIPlaybackDelegate>
 
 @property (nonatomic) BOOL isInPlaybackMode;
 @property (nonatomic) BOOL isInMultipleMode;
 
-@property (strong, nonatomic) UIView *videoFeedView;
+@property (weak, nonatomic) IBOutlet UIView *videoFeedView;
 
 @property (weak, nonatomic) IBOutlet UIButton *previousButton;
 @property (weak, nonatomic) IBOutlet UIButton *nextButton;
 @property (weak, nonatomic) IBOutlet UIButton *multipleButton;
 @property (weak, nonatomic) IBOutlet UIButton *singleButton;
+
+@property (nonatomic) VideoPreviewerSDKAdapter *previewerAdapter;
 
 @end
 
@@ -84,10 +87,10 @@
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
         WeakRef(target);
-        [camera getCameraModeWithCompletion:^(DJICameraMode mode, NSError * _Nullable error) {
+        [camera getModeWithCompletion:^(DJICameraMode mode, NSError * _Nullable error) {
             WeakReturn(target);
             if (error) {
-                ShowResult(@"ERROR: getCameraModeWithCompletion:. %@", error.description);
+                ShowResult(@"ERROR: getModeWithCompletion:. %@", error.description);
             }
             else if (mode == DJICameraModePlayback) {
                 target.isInPlaybackMode = YES;
@@ -106,10 +109,10 @@
     __weak DJICamera* camera = [DemoComponentHelper fetchCamera];
     if (camera) {
         WeakRef(target);
-        [camera setCameraMode:DJICameraModePlayback withCompletion:^(NSError * _Nullable error) {
+        [camera setMode:DJICameraModePlayback withCompletion:^(NSError * _Nullable error) {
             WeakReturn(target);
             if (error) {
-                ShowResult(@"ERROR: setCameraMode:withCompletion:. %@", error.description);
+                ShowResult(@"ERROR: setMode:withCompletion:. %@", error.description);
             }
             else {
                 // Normally, once an operation is finished, the camera still needs some time to finish up
@@ -165,22 +168,19 @@
 
 #pragma mark - UI related
 - (void)setVideoPreview {
-    self.videoFeedView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)];
-    [self.view addSubview:self.videoFeedView];
-    [self.view sendSubviewToBack:self.videoFeedView];
-    //    self.videoFeedView.backgroundColor = [UIColor grayColor];
-    
-    [[VideoPreviewer instance] start];
-    [[VideoPreviewer instance] setView:self.videoFeedView];
+    [[DJIVideoPreviewer instance] start];
+    [[DJIVideoPreviewer instance] setView:self.videoFeedView];
+    self.previewerAdapter = [VideoPreviewerSDKAdapter adapterWithDefaultSettings];
+    [self.previewerAdapter start];
+	DJICamera* camera = [DemoComponentHelper fetchCamera];
+	[self.previewerAdapter setupFrameControlHandler];
 }
 
 - (void)cleanVideoPreview {
-    [[VideoPreviewer instance] unSetView];
-    [VideoPreviewer removePreview];
-    
-    if (self.videoFeedView != nil) {
-        [self.videoFeedView removeFromSuperview];
-        self.videoFeedView = nil;
+    [[DJIVideoPreviewer instance] unSetView];
+    if (self.previewerAdapter) {
+    	[self.previewerAdapter stop];
+    	self.previewerAdapter = nil;
     }
 }
 
@@ -191,10 +191,8 @@
 }
 
 #pragma mark - DJICameraDelegate
--(void)camera:(DJICamera *)camera didReceiveVideoData:(uint8_t *)videoBuffer length:(size_t)size {
-    uint8_t* pBuffer = (uint8_t*)malloc(size);
-    memcpy(pBuffer, videoBuffer, size);
-    [[[VideoPreviewer instance] dataQueue] push:pBuffer length:(int)size];
+-(void)camera:(DJICamera *)camera didReceiveVideoData:(uint8_t *)videoBuffer length:(size_t)length {
+    [[DJIVideoPreviewer instance] push:videoBuffer length:(int)length];
 }
   
 #pragma mark - DJIPlaybackDelegate

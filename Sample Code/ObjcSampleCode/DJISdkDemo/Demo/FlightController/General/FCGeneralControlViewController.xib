@@ -64,6 +64,7 @@
                 <constraint firstItem="bnm-ld-1G4" firstAttribute="centerX" secondItem="i5M-Pr-FkT" secondAttribute="centerX" id="pTG-mL-wak"/>
                 <constraint firstItem="Wli-iX-lo7" firstAttribute="centerX" secondItem="i5M-Pr-FkT" secondAttribute="centerX" id="rbg-ZB-cOy"/>
             </constraints>
+            <point key="canvasLocation" x="397" y="647"/>
         </view>
     </objects>
     <resources>

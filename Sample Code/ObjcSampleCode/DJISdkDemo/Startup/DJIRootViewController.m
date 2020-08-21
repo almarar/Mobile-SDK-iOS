@@ -7,8 +7,10 @@
 
 #import "DJIRootViewController.h"
 #import "ComponentSelectionViewController.h"
+#import "BluetoothConnectorViewController.h"
 #import "DemoAlertView.h"
 #import "DemoUtilityMacro.h"
+#import "AppActivationViewController.h"
 
 #define ENTER_DEBUG_MODE 0
 #define ENABLE_REMOTE_LOGGER 0
@@ -19,38 +21,93 @@
 @property (weak, nonatomic) IBOutlet UILabel *productConnectionStatus;
 @property (weak, nonatomic) IBOutlet UILabel *productModel;
 @property (weak, nonatomic) IBOutlet UILabel *productFirmwarePackageVersion;
+@property (weak, nonatomic) IBOutlet UILabel *debugModeLabel;
 @property (weak, nonatomic) IBOutlet UIButton *connectButton;
 @property (weak, nonatomic) IBOutlet UILabel *sdkVersionLabel;
+
+@property (nonatomic) AppActivationViewController *appActivationVC;
 @end
 
 @implementation DJIRootViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DJISDKManager registerAppWithDelegate:self];
     
-    // disable the connect button by default
-    [self.connectButton setEnabled:NO];
-    
-    //Register App with key
-    NSString* appKey = @"Please enter your App Key here";
-    
-    if ([appKey isEqualToString:@"Please enter your App Key here"]) {
-        ShowResult(@"Please enter App Key.");
-    }
-    else
-    {
-        [DJISDKManager registerApp:appKey withDelegate:self];
-    }
+    [self initUI];
+}
 
-    self.sdkVersionLabel.text = [@"DJI SDK Version: " stringByAppendingString:[DJISDKManager getSDKVersion]];
+- (void)appRegisteredWithError:(NSError *_Nullable)error
+{
+    if (error) {
+        ShowResult(@"Registration Error:%@", error);
+        [self.connectButton setEnabled:NO];
+    }
+    else {
+        
+#if ENTER_DEBUG_MODE
+        [DJISDKManager enableBridgeModeWithBridgeAppIP:@"172.20.10.3"];
+#else
+        [DJISDKManager startConnectionToProduct];
+#endif
+        
+#if ENABLE_REMOTE_LOGGER
+        [DJISDKManager enableRemoteLoggingWithDeviceID:@"Device ID" logServerURLString:@"Enter Remote Logger URL here"];
+#endif
+
+        self.appActivationVC = [[AppActivationViewController alloc] init];
+        self.appActivationVC.navController = self.navigationController; 
+        [self.appActivationVC setup];
+    }
+}
+
+- (void)didUpdateDatabaseDownloadProgress:(NSProgress *)progress
+{
+    NSLog(@"Download Database:\n%lld/%lld", progress.completedUnitCount, progress.totalUnitCount);
+}
+
+-(void) productConnected:(DJIBaseProduct* _Nullable) product {
+    if (product) {
+        self.product = product;
+        [self.connectButton setEnabled:YES];
+    }
     
+    [self updateStatusBasedOn:product];
+}
+
+-(void) productDisconnected {
+    
+    NSString* message = [NSString stringWithFormat:@"Connection lost. Back to root. "];
+    
+    WeakRef(target);
+    [DemoAlertView showAlertViewWithMessage:message titles:@[@"Cancel", @"Back"] action:^(NSUInteger buttonIndex) {
+        WeakReturn(target);
+        if (buttonIndex == 1) {
+            if (![target.navigationController.topViewController isKindOfClass:[DJIRootViewController class]]) {
+                [target.navigationController popToRootViewControllerAnimated:NO];
+            }
+        }
+    }];
+    
+    [self.connectButton setEnabled:NO];
+    self.product = nil;
+    
+    [self updateStatusBasedOn:nil];
+}
+
+- (void)initUI
+{
+    self.title = @"DJI iOS SDK Sample";
+    self.sdkVersionLabel.text = [@"DJI SDK Version: " stringByAppendingString:[DJISDKManager SDKVersion]];
     self.productFirmwarePackageVersion.hidden = YES;
     self.productModel.hidden = YES;
-    
-    self.title = @"DJI iOS SDK Sample";
+    //Disable the connect button by default
+    [self.connectButton setEnabled:NO];
+    [self.debugModeLabel setHidden:!ENTER_DEBUG_MODE];
 }
 
 - (void)viewDidAppear:(BOOL)animated{
+    [super viewDidAppear:animated];
     if(self.product){
         [self updateStatusBasedOn:self.product];
     }
@@ -64,54 +121,12 @@
     }
 }
 
-#pragma mark -
--(void) sdkManagerDidRegisterAppWithError:(NSError *)error {
-    if (error) {
-        ShowResult(@"Registration Error:%@", error);
-        [self.connectButton setEnabled:NO];
-    }
-    else {
-        
-#if ENTER_DEBUG_MODE
-        [DJISDKManager enterDebugModeWithDebugId:@"Enter Debug ID Here"];
-#else
-        [DJISDKManager startConnectionToProduct];
-#endif
-        
-#if ENABLE_REMOTE_LOGGER
-        [DJISDKManager enableRemoteLoggingWithDeviceID:@"Device ID" logServerURLString:@"Enter Remote Logger URL here"];
-#endif
-    }
-    
-}
-
--(void) sdkManagerProductDidChangeFrom:(DJIBaseProduct* _Nullable) oldProduct to:(DJIBaseProduct* _Nullable) newProduct{
-    if (newProduct) {
-        self.product = newProduct;
-        [self.connectButton setEnabled:YES];
-        
-    } else {
-        NSString* message = [NSString stringWithFormat:@"Connection lost. Back to root. "];
-        UIAlertView* alertView = [[UIAlertView alloc] initWithTitle:@"" message:message delegate:self cancelButtonTitle:@"Cancel" otherButtonTitles:@"Back", nil];
-        [self.connectButton setEnabled:NO];
-        
-        [alertView show];
-        self.product = nil;
-    }
-    
-    [self updateStatusBasedOn:newProduct];
+- (IBAction)onBluetoothButtonClicked:(id)sender {
+    BluetoothConnectorViewController* vc = [[BluetoothConnectorViewController alloc] init];
+    [self.navigationController pushViewController:vc animated:YES];
 }
 
 #pragma mark -
-
-- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
-{
-    if (buttonIndex == 1) {
-        if (![self.navigationController.topViewController isKindOfClass:[DJIRootViewController class]]) {
-            [self.navigationController popToRootViewControllerAnimated:NO];
-        }
-    }
-}
 
 -(void) updateFirmwareVersion:(NSString*) version {
     if (nil != version) {
